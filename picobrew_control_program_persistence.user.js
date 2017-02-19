@@ -1,24 +1,31 @@
 // ==UserScript==
 // @name         Picobrew Control Program Persistence
-// @namespace    https://gist.github.com
-// @version      0.1
+// @namespace    https://github.com/toddq
+// @version      0.2
 // @description  Allow saving and re-using control programs in Picobrew's 'Advanced Editor'
 // @author       Todd Quessenberry
 // @match        https://picobrew.com/members/recipes/editctlprogram*
+// @require      https://www.gstatic.com/firebasejs/live/3.0/firebase.js
 // @grant GM_setValue
 // @grant GM_getValue
 // @grant GM_listValues
+// @grant GM_deleteValue
 // ==/UserScript==
 
 var $controls;
 var $programList;
 var $nameField;
+var cloudUrl;
 
 (function() {
     'use strict';
+
     $('#generalWarning').modal('hide');
     addControls();
-    loadProgramList();
+
+    initializeUser()
+        .then(migrateData)
+        .then(loadProgramList);
 })();
 
 function addControls() {
@@ -57,20 +64,53 @@ function addProgramSaveControls() {
 }
 
 function loadProgramList() {
-    var all = GM_listValues();
-    $.each(all, function () {
-        addToProgramList(this);
-    });
+    $.get(cloudUrl + '.json')
+        .then(function (response) {
+            $.each(response, function (key, value) {
+                console.debug(key, ':', value);
+                addToProgramList(key, value);
+            });
+        })
+        .fail(function (error) {
+            console.error(error);
+        });
 }
 
-function addToProgramList(name) {
-    $programList.append('<option>' + name + '</option>');
+function migrateData () {
+    console.debug('migrating data');
+    var local = GM_listValues();
+    var migrations = [];
+    console.debug('local values: ', local);
+    $.each(local, function (index, name) {
+        if (name !== 'userUuid') {
+            console.debug('migrating ', name);
+            var program = JSON.parse(GM_getValue(name));
+            var migration = saveProgram(program)
+                .then(function () {
+                    console.debug(name, 'saved.  deleting now.');
+                    GM_deleteValue(name);
+                });
+            migrations.push(migration);
+        }
+    });
+    return $.when.apply($, migrations)
+        .then(function () {
+            if (migrations.length) {
+                showVersionUpgradeMessage();
+                console.debug('done migrating all data');
+            }
+        });
+}
+
+function addToProgramList(name, value) {
+    var option = $('<option>' + name + '</option>').data('value', value);
+    $programList.append(option);
 }
 
 function loadSavedProgram() {
     var selectedName = $programList.val();
     if (selectedName) {
-        var program = JSON.parse(GM_getValue(selectedName));
+        var program = $($programList.find(':selected')).data('value');
         $nameField.val(program.name);
         $.each(program.formValues, function (index, step) {
             $.each(step, function (key, value) {
@@ -82,9 +122,22 @@ function loadSavedProgram() {
 
 function saveCurrentValues() {
     var program = scrapeForm();
-    GM_setValue(program.name, JSON.stringify(program));
-    showSaveSuccess();
-    addToListAndSelect(program.name);
+    saveProgram(program)
+        .then(function (response) {
+            console.debug('response: ', response);
+            showSaveSuccess();
+            addToListAndSelect(program);
+        }).fail(function (error) {
+            console.error(error);
+        });
+}
+
+function saveProgram (program) {
+    return $.ajax({
+        method: 'PUT',
+        url: cloudUrl + '/' + program.name + '.json',
+        data: JSON.stringify(program)
+    });
 }
 
 function scrapeForm() {
@@ -109,11 +162,54 @@ function scrapeForm() {
     return program;
 }
 
-function addToListAndSelect(name) {
-    if (!$programList.find('option:contains(' + name + ')').length) {
-        addToProgramList(name);
+function addToListAndSelect(program) {
+    var listItem = $programList.find('option:contains(' + program.name + ')');
+    if (listItem.length) {
+        listItem.data('value', program);
+    } else {
+        addToProgramList(program.name, program);
     }
-    $programList.val(name);
+    $programList.val(program.name);
+}
+
+function initializeUser() {
+    console.debug('initializing user');
+    return getUserId()
+        .then(function (userId) {
+            console.debug('got userId:', userId, ', setting cloud url');
+            cloudUrl = 'https://pb-control-programs.firebaseio.com/users/' + userId + '/control-programs';
+        });
+}
+
+function getUserId() {
+    console.debug('getting user id');
+    var userUuid = GM_getValue('userUuid');
+
+    if (!userUuid || userUuid === 'undefined') {
+        console.debug('scraping web page for user id');
+        return $.get('/Members/User/Brewhouse.cshtml')
+            .then(function (data) {
+                var $data = $('<div>').html(data);
+                var $user = $data.find('#user');
+                if ($user && $user.val()) {
+                    userUuid = $user.val();
+                    console.log('storing userid:', userUuid);
+                    GM_setValue('userUuid', userUuid);
+                    return userUuid;
+                }
+            })
+            .fail(function (error) {
+                console.error(error);
+            });
+    }
+    return $.when(userUuid);
+}
+
+function showVersionUpgradeMessage() {
+    $('#generalWarning #msgBod').text('Your saved programs have been migrated to the cloud.  You can now access them from any browser running this Userscript.');
+    $('#generalWarning #myModalLabel').text('');
+    $('#generalWarning #msgBod').addClass('bg-success');
+    $('#generalWarning').modal('show');
 }
 
 function showSaveSuccess() {
