@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Picobrew Control Program Persistence
 // @namespace    https://github.com/toddq
-// @version      0.2
+// @version      0.3
 // @description  Allow saving and re-using control programs in Picobrew's 'Advanced Editor'
 // @author       Todd Quessenberry
 // @match        https://picobrew.com/members/recipes/editctlprogram*
@@ -114,7 +114,7 @@ function loadSavedProgram() {
         $nameField.val(program.name);
         $.each(program.formValues, function (index, step) {
             $.each(step, function (key, value) {
-                $('input[name=' + key + ']').val(value);
+                $(':input[name=' + key + ']').val(value);
             });
         });
     }
@@ -189,14 +189,19 @@ function getUserId() {
         console.debug('scraping web page for user id');
         return $.get('/Members/User/Brewhouse.cshtml')
             .then(function (data) {
+                // TODO: it appears this trick no longer works, might be harder to get this now
                 var $data = $('<div>').html(data);
                 var $user = $data.find('#user');
                 if ($user && $user.val()) {
                     userUuid = $user.val();
-                    console.log('storing userid:', userUuid);
-                    GM_setValue('userUuid', userUuid);
-                    return userUuid;
+                } else {
+                    // try using username instead
+                    $user = $('#nav-account a.dropdown-toggle').text();
+                    userUuid = prompt('Could not scrape your user UID, please enter it now or use your username:', $user);
                 }
+                console.log('storing userid:', userUuid);
+                GM_setValue('userUuid', userUuid);
+                return userUuid;
             })
             .fail(function (error) {
                 console.error(error);
